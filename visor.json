@@ -1,0 +1,42 @@
+{
+  "version": "2",
+  "network": {
+    "name": "mainnet",
+    "rpc_url": "https://api.hyperliquid.xyz",
+    "ws_url": "wss://api.hyperliquid.xyz/ws"
+  },
+  "node": {
+    "mode": "non-validator",
+    "disable_output_file_buffering": true,
+    "log_level": "info",
+    "max_connections": 1000,
+    "peer_timeout": 30
+  },
+  "peering": {
+    "static_peers": [
+      {
+        "ip": "157.90.207.92",
+        "port": 30303,
+        "node_id": "",
+        "trusted": true
+      }
+    ],
+    "enable_discovery": false,
+    "max_peers": 50
+  },
+  "storage": {
+    "cache_size_mb": 2048,
+    "pruning": "archive"
+  },
+  "performance": {
+    "threads": 14,
+    "pin_threads": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    "priority": "high"
+  },
+  "monitoring": {
+    "enable_metrics": true,
+    "metrics_port": 9090,
+    "metrics_address": "127.0.0.1"
+  }
+}
+

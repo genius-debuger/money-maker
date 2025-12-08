@@ -1,0 +1,39 @@
+global:
+  scrape_interval: 1s  # High frequency scraping for HFT metrics
+  evaluation_interval: 1s
+  external_labels:
+    cluster: 'hyperliquid-hft'
+    environment: 'production'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+# rule_files:
+#   - "alerts.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Scrape Hyperliquid HFT Rust bot metrics
+  - job_name: 'hyperliquid-hft'
+    static_configs:
+      - targets: ['127.0.0.1:9090']
+    scrape_interval: 500ms  # Very high frequency for latency metrics
+    metrics_path: '/metrics'
+    
+  # Optional: Node exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['127.0.0.1:9100']
+    scrape_interval: 5s
+    
+  # Optional: Python process metrics (if using prometheus_client)
+  - job_name: 'python-alpha-engine'
+    static_configs:
+      - targets: ['127.0.0.1:9091']  # If Python exposes metrics
+    scrape_interval: 1s
+

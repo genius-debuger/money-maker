@@ -1,0 +1,264 @@
+{
+  "dashboard": {
+    "title": "Hyperliquid HFT System Dashboard",
+    "tags": ["hft", "hyperliquid", "trading"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "1s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Real-Time PnL",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_pnl_total",
+            "legendFormat": "Total PnL"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "decimals": 2,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "red"},
+                {"value": 0, "color": "yellow"},
+                {"value": 1000, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Maker Rebates Collected",
+        "type": "stat",
+        "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_maker_rebates",
+            "legendFormat": "Rebates"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "decimals": 2
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Inventory Skew",
+        "type": "gauge",
+        "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_inventory_skew",
+            "legendFormat": "Inventory %"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": -100,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "green"},
+                {"value": -80, "color": "yellow"},
+                {"value": 80, "color": "yellow"},
+                {"value": -90, "color": "red"},
+                {"value": 90, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Tick-to-Trade Latency Heatmap",
+        "type": "heatmap",
+        "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(hyperliquid_hft_latency_tick_to_trade_ms_bucket[1s])) by (le)",
+            "format": "heatmap",
+            "legendFormat": "{{le}}"
+          }
+        ],
+        "heatmap": {
+          "xAxis": {
+            "show": true
+          },
+          "yAxis": {
+            "show": true,
+            "unit": "ms"
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Latency Percentiles",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(hyperliquid_hft_latency_tick_to_trade_ms_bucket[1s])) by (le))",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(hyperliquid_hft_latency_tick_to_trade_ms_bucket[1s])) by (le))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(hyperliquid_hft_latency_tick_to_trade_ms_bucket[1s])) by (le))",
+            "legendFormat": "p99"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Latency (ms)",
+            "format": "ms"
+          },
+          {
+            "format": "short"
+          }
+        ],
+        "lines": true,
+        "legend": {
+          "show": true,
+          "values": true
+        }
+      },
+      {
+        "id": 6,
+        "title": "Circuit Breaker Status",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 12, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_circuit_breaker_active",
+            "legendFormat": "Active"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "green"},
+                {"value": 1, "color": "red"}
+              ]
+            },
+            "mappings": [
+              {
+                "type": "value",
+                "options": {
+                  "0": {"text": "OK", "color": "green"},
+                  "1": {"text": "TRIGGERED", "color": "red"}
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Drawdown %",
+        "type": "graph",
+        "gridPos": {"x": 6, "y": 12, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_drawdown_pct",
+            "legendFormat": "Drawdown"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "green"},
+                {"value": 2, "color": "yellow"},
+                {"value": 3, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "Realized vs Unrealized PnL",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 12, "w": 12, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_pnl_realized",
+            "legendFormat": "Realized"
+          },
+          {
+            "expr": "hyperliquid_hft_pnl_unrealized",
+            "legendFormat": "Unrealized"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "PnL (USD)",
+            "format": "currencyUSD"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Book Update Latency",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 16, "w": 12, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_latency_book_update_ms",
+            "legendFormat": "Book Update"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Latency (ms)",
+            "format": "ms"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Signal Processing Latency",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 16, "w": 12, "h": 4},
+        "targets": [
+          {
+            "expr": "hyperliquid_hft_latency_signal_processing_ms",
+            "legendFormat": "Signal Processing"
+          }
+        ],
+        "yaxes": [
+          {
+            "label": "Latency (ms)",
+            "format": "ms"
+          }
+        ]
+      }
+    ],
+    "time": {
+      "from": "now-5m",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["1s", "5s", "10s", "30s", "1m"]
+    }
+  }
+}
+

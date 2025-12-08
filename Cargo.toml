@@ -1,0 +1,31 @@
+[package]
+name = "hyperliquid-hft"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.32", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+hyperliquid-rust-sdk = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+dashmap = "5.5"
+zeromq = "0.4"
+rmp-serde = "1.1"
+async-trait = "0.1"
+futures = "0.3"
+tokio-stream = "0.1"
+axum = { version = "0.7", features = ["metrics"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+num-traits = "0.2"
+thiserror = "1.0"
+chrono = "0.4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
