@@ -1,6 +1,6 @@
-use crate::types::{BookLevel, BookUpdate, MarketData};
+use crate::types::{BookLevel, MarketData};
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,15 +19,14 @@ impl Level {
     }
 }
 
-/// Double-buffered order book implementation
-/// Pre-allocates two buffers to avoid memory allocation on snapshot updates
+/// Lock-free double-buffered order book for snapshot-only feeds.
 pub struct DoubleBufferedBook {
     symbol: String,
     bids: [Vec<Level>; 2],
     asks: [Vec<Level>; 2],
     read_index: AtomicUsize,
-    last_sequence: std::sync::atomic::AtomicU64,
-    last_update_time: std::sync::atomic::AtomicU64,
+    last_sequence: AtomicU64,
+    last_update_time: AtomicU64,
     depth: usize,
 }
 
@@ -50,51 +49,31 @@ impl DoubleBufferedBook {
         }
     }
 
-    /// Update order book with a snapshot
-    /// This is zero-allocation: we clear and reuse the write buffer
-    pub fn apply_snapshot(
-        &mut self,
-        bids: &[(f64, f64)],
-        asks: &[(f64, f64)],
-        sequence: u64,
-        timestamp: u64,
-    ) {
-        // Get write buffer (opposite of read)
+    /// Apply full snapshot without allocating.
+    pub fn apply_snapshot(&self, bids: &[(f64, f64)], asks: &[(f64, f64)], sequence: u64, timestamp: u64) {
         let write_idx = 1 - self.read_index.load(Ordering::Acquire);
-        
-        // Write bids
-        {
-            let write_bids = &mut self.bids.buffers[write_idx];
-            write_bids.clear();
-            write_bids.extend(
-                bids.iter()
-                    .take(self.depth)
-                    .filter(|(_, size)| *size > 0.0)
-                    .map(|(price, size)| Level::new(*price, *size)),
-            );
-            // Sort descending (highest bid first)
-            write_bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
-        }
 
-        // Write asks
-        {
-            let write_asks = &mut self.asks.buffers[write_idx];
-            write_asks.clear();
-            write_asks.extend(
-                asks.iter()
-                    .take(self.depth)
-                    .filter(|(_, size)| *size > 0.0)
-                    .map(|(price, size)| Level::new(*price, *size)),
-            );
-            // Sort ascending (lowest ask first)
-            write_asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
-        }
+        let write_bids = unsafe { &mut *(&self.bids[write_idx] as *const _ as *mut Vec<Level>) };
+        write_bids.clear();
+        write_bids.extend(
+            bids.iter()
+                .take(self.depth)
+                .filter(|(_, sz)| *sz > 0.0)
+                .map(|(p, sz)| Level::new(*p, *sz)),
+        );
+        write_bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Atomic swap: readers now see the new buffer
-        let current = self.read_index.load(Ordering::Acquire);
-        self.read_index.store(1 - current, Ordering::Release);
+        let write_asks = unsafe { &mut *(&self.asks[write_idx] as *const _ as *mut Vec<Level>) };
+        write_asks.clear();
+        write_asks.extend(
+            asks.iter()
+                .take(self.depth)
+                .filter(|(_, sz)| *sz > 0.0)
+                .map(|(p, sz)| Level::new(*p, *sz)),
+        );
+        write_asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Update metadata atomically
+        self.read_index.store(write_idx, Ordering::Release);
         self.last_sequence.store(sequence, Ordering::Release);
         self.last_update_time.store(timestamp, Ordering::Release);
     }
@@ -157,36 +136,32 @@ impl DoubleBufferedBook {
 }
 
 
-// Safe wrapper using Arc<Mutex> for actual usage
+#[derive(Clone)]
 pub struct SafeDoubleBufferedBook {
-    inner: Arc<parking_lot::Mutex<DoubleBufferedBook>>,
+    inner: Arc<DoubleBufferedBook>,
 }
 
 impl SafeDoubleBufferedBook {
     pub fn new(symbol: String, depth: usize) -> Self {
         Self {
-            inner: Arc::new(parking_lot::Mutex::new(DoubleBufferedBook::new(symbol, depth))),
+            inner: Arc::new(DoubleBufferedBook::new(symbol, depth)),
         }
     }
 
     pub fn apply_snapshot(&self, bids: &[(f64, f64)], asks: &[(f64, f64)], sequence: u64, timestamp: u64) {
-        self.inner.lock().apply_snapshot(bids, asks, sequence, timestamp);
+        self.inner.apply_snapshot(bids, asks, sequence, timestamp);
     }
 
-    pub fn get_symbol(&self) -> String {
-        self.inner.lock().symbol.clone()
-    }
-
-    pub fn get_market_data(&self) -> Option<MarketData> {
-        self.inner.lock().get_market_data()
+    pub fn market_data(&self) -> Option<MarketData> {
+        self.inner.get_market_data()
     }
 
     pub fn get_levels(&self, levels: usize) -> (Vec<BookLevel>, Vec<BookLevel>) {
-        self.inner.lock().get_levels(levels)
+        self.inner.get_levels(levels)
     }
 
     pub fn get_last_sequence(&self) -> u64 {
-        self.inner.lock().get_last_sequence()
+        self.inner.get_last_sequence()
     }
 }
 

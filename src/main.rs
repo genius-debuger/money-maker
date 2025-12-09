@@ -16,6 +16,7 @@ use strategy::StrategyProcessor;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use websocket::WebSocketManager;
+use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -49,16 +50,15 @@ async fn main() -> Result<()> {
     });
 
     // Initialize ZeroMQ publisher for market data
-    let mut zmq_publisher = ZmqPublisher::new().await?;
+    let zmq_publisher = ZmqPublisher::new().await?;
     info!("✅ ZeroMQ publisher initialized");
 
-    // Spawn WebSocket reader (this would connect to Hyperliquid WS)
+    // Spawn WebSocket reader with real subscription
     let ws_handle = tokio::spawn({
         let book_manager = book_manager.clone();
-        let zmq_publisher_ws = Arc::new(tokio::sync::Mutex::new(zmq_publisher));
-        
+        let zmq_pub = Arc::new(tokio::sync::Mutex::new(zmq_publisher));
         async move {
-            websocket_reader(book_manager, zmq_publisher_ws).await
+            websocket_reader(book_manager, zmq_pub).await
         }
     });
 
@@ -108,24 +108,75 @@ async fn websocket_reader(
     book_manager: Arc<BookManager>,
     zmq_publisher: Arc<tokio::sync::Mutex<ZmqPublisher>>,
 ) -> Result<()> {
-    // TODO: Implement actual Hyperliquid WebSocket connection
-    // This is a placeholder structure
-    
+    use crate::types::BookUpdate;
+    use websocket::WebSocketManager;
+    use serde_json::json;
+
+    // Subscription for snapshot L2 books
+    let subscribe_msg = json!({
+        "method": "subscribe",
+        "params": { "type": "l2Book", "symbols": ["BTC-USD", "ETH-USD"] }
+    });
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<serde_json::Value>();
+    let ws = WebSocketManager::new("wss://api.hyperliquid.xyz/ws".to_string(), subscribe_msg, tx);
+
+    // Run FSM
+    tokio::spawn(async move {
+        if let Err(e) = ws.run().await {
+            warn!("WebSocket manager stopped: {}", e);
+        }
+    });
+
     info!("📡 WebSocket reader started");
-    
-    // Example structure:
-    // 1. Connect to Hyperliquid WS endpoint
-    // 2. Subscribe to L2 orderbook updates
-    // 3. Parse messages into BookUpdate
-    // 4. Update LocalBook
-    // 5. Publish to ZeroMQ for Python
-    
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        
-        // Placeholder: In real implementation, this would process WebSocket messages
-        // For now, this is the structure where WebSocket handling would go
+
+    while let Some(msg) = rx.recv().await {
+        if msg.get("type").and_then(|t| t.as_str()) != Some("l2Book") {
+            continue;
+        }
+
+        let symbol = match msg.get("symbol").and_then(|s| s.as_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let bids = parse_levels(msg.get("bids"));
+        let asks = parse_levels(msg.get("asks"));
+        let sequence = msg.get("sequence").and_then(|s| s.as_u64()).unwrap_or(0);
+        let ts = msg.get("time").and_then(|t| t.as_u64()).unwrap_or(0);
+
+        let book = book_manager.get_or_create(symbol.clone(), 20);
+        book.apply_snapshot(&bids, &asks, sequence, ts);
+
+        // publish to Python
+        let update = BookUpdate {
+            symbol,
+            sequence,
+            bids: bids.clone(),
+            asks: asks.clone(),
+            timestamp: ts,
+        };
+        let payload = rmp_serde::to_vec(&update)?;
+        let mut pubr = zmq_publisher.lock().await;
+        pubr.socket.send(payload.into()).await?;
     }
+
+    Ok(())
+}
+
+fn parse_levels(v: Option<&serde_json::Value>) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    if let Some(arr) = v.and_then(|x| x.as_array()) {
+        for entry in arr.iter().take(40) {
+            if let Some(pair) = entry.as_array() {
+                if pair.len() >= 2 {
+                    if let (Some(p), Some(s)) = (pair[0].as_f64(), pair[1].as_f64()) {
+                        out.push((p, s));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 async fn python_signal_receiver(

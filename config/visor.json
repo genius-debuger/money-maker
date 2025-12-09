@@ -5,6 +5,7 @@
     "chain_id": 998,
     "rpc_url": "https://api.hyperliquid.xyz/info",
     "ws_url": "wss://api.hyperliquid.xyz/ws",
+    "startup_node_ip": "157.90.207.92",
     "validator_rpc": "https://validator-http-us.hyperliquid.xyz",
     "validator_ws": "wss://validator-ws-us.hyperliquid.xyz"
   },

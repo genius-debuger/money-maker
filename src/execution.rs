@@ -1,5 +1,5 @@
 use crate::types::{Order, OrderInstruction, OrderSide, OrderStatus, OrderType};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::env;
@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
+use hyperliquid_rust_sdk as hlsdk;
 
 pub struct OrderManager {
     orders: Arc<RwLock<HashMap<String, Order>>>,
@@ -14,6 +15,7 @@ pub struct OrderManager {
     batch_tx: mpsc::UnboundedSender<Vec<OrderInstruction>>,
     last_batch_time: Arc<RwLock<Instant>>,
     batch_window: Duration,
+    max_batch: usize,
 }
 
 impl OrderManager {
@@ -23,7 +25,7 @@ impl OrderManager {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(2);
-        
+        let max_batch = 10;
         tracing::info!("OrderManager initialized with batch window: {}ms", batch_window_ms);
         
         let (tx, rx) = mpsc::unbounded_channel();
@@ -33,6 +35,7 @@ impl OrderManager {
             batch_tx: tx,
             last_batch_time: Arc::new(RwLock::new(Instant::now())),
             batch_window: Duration::from_millis(batch_window_ms),
+            max_batch,
         };
         (manager, rx)
     }
@@ -44,16 +47,23 @@ impl OrderManager {
     pub fn submit_order(&self, instruction: OrderInstruction) -> Result<String> {
         let order_id = format!("{}_{}", instruction.symbol, Instant::now().as_nanos());
         
+        let mut should_flush = false;
         {
             let mut pending = self.pending_batch.write();
             pending.push(instruction);
+            if pending.len() >= self.max_batch {
+                should_flush = true;
+            }
         }
 
         // Check if batch window expired
-        let should_flush = {
-            let last_time = self.last_batch_time.read();
-            Instant::now().duration_since(*last_time) >= self.batch_window
-        };
+        if !should_flush {
+            let should = {
+                let last_time = self.last_batch_time.read();
+                Instant::now().duration_since(*last_time) >= self.batch_window
+            };
+            should_flush = should;
+        }
 
         if should_flush {
             self.flush_batch()?;
@@ -143,6 +153,8 @@ impl OrderManager {
 pub async fn batch_processor(
     mut batch_rx: mpsc::UnboundedReceiver<Vec<OrderInstruction>>,
 ) -> Result<()> {
+    let client = hlsdk::Client::new_default();
+
     while let Some(batch) = batch_rx.recv().await {
         if batch.is_empty() {
             continue;
@@ -150,30 +162,33 @@ pub async fn batch_processor(
 
         // Convert to batchModify format for Hyperliquid
         // This consumes only 1 rate-limit unit for N orders
-        let batch_payload = serde_json::json!({
-            "type": "batchModify",
-            "orders": batch.iter().map(|instr| {
-                serde_json::json!({
-                    "a": instr.size,
-                    "b": instr.price,
-                    "p": instr.symbol.clone(),
-                    "r": instr.reduce_only,
-                    "s": match instr.side {
-                        OrderSide::Buy => "B",
-                        OrderSide::Sell => "A",
-                    },
-                    "t": match instr.order_type {
-                        OrderType::Limit => { "Limit" },
-                        OrderType::PostOnly => { "Limit" },
-                        OrderType::Market => { "Market" },
-                    },
-                })
-            }).collect::<Vec<_>>(),
-        });
+        let orders: Vec<hlsdk::types::BatchOrder> = batch
+            .iter()
+            .map(|instr| hlsdk::types::BatchOrder {
+                symbol: instr.symbol.clone(),
+                size: instr.size,
+                price: instr.price,
+                reduce_only: instr.reduce_only,
+                side: match instr.side {
+                    OrderSide::Buy => hlsdk::types::Side::Bid,
+                    OrderSide::Sell => hlsdk::types::Side::Ask,
+                },
+                order_type: match instr.order_type {
+                    OrderType::Limit | OrderType::PostOnly => hlsdk::types::OrderType::Limit,
+                    OrderType::Market => hlsdk::types::OrderType::Market,
+                },
+                post_only: matches!(instr.order_type, OrderType::PostOnly),
+            })
+            .collect();
 
-        // TODO: Send to Hyperliquid API
-        // This would be integrated with hyperliquid-rust-sdk
-        tracing::info!("Sending batch of {} orders", batch.len());
+        match client.batch_modify(orders).await {
+            Ok(_) => {
+                tracing::info!("Sent batch of {} orders", batch.len());
+            }
+            Err(e) => {
+                tracing::error!("batch_modify failed: {}", e);
+            }
+        }
     }
 
     Ok(())

@@ -17,7 +17,7 @@ S3_BUCKET = "hyperliquid-archive"
 S3_PREFIX = "market_data"
 S3_REQUEST_PAYER = "requester"
 
-# Local storage
+# Local storage (Parquet with wide columns)
 DATA_DIR = Path("data/parquet")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -78,25 +78,24 @@ def download_and_process_file(
                 bids = snapshot.get("bids", snapshot.get("data", {}).get("bids", []))
                 asks = snapshot.get("asks", snapshot.get("data", {}).get("asks", []))
                 
-                # Flatten bids and asks (price, size pairs)
-                for level, (price, size) in enumerate(bids[:20]):  # Top 20 levels
-                    records.append({
-                        "timestamp": timestamp,
-                        "side": "bid",
-                        "level": level,
-                        "price": float(price),
-                        "size": float(size),
-                    })
-                
-                for level, (price, size) in enumerate(asks[:20]):  # Top 20 levels
-                    records.append({
-                        "timestamp": timestamp,
-                        "side": "ask",
-                        "level": level,
-                        "price": float(price),
-                        "size": float(size),
-                    })
-                    
+                row = {"timestamp": timestamp}
+                # Top 20 levels each side -> wide columns bid_px_i, bid_sz_i, ask_px_i, ask_sz_i
+                for level in range(20):
+                    if level < len(bids):
+                        bp, bs = bids[level]
+                        row[f"bid_px_{level}"] = float(bp)
+                        row[f"bid_sz_{level}"] = float(bs)
+                    else:
+                        row[f"bid_px_{level}"] = 0.0
+                        row[f"bid_sz_{level}"] = 0.0
+                    if level < len(asks):
+                        ap, az = asks[level]
+                        row[f"ask_px_{level}"] = float(ap)
+                        row[f"ask_sz_{level}"] = float(az)
+                    else:
+                        row[f"ask_px_{level}"] = 0.0
+                        row[f"ask_sz_{level}"] = 0.0
+                records.append(row)
             except json.JSONDecodeError as e:
                 print(f"Warning: Failed to parse line {line_num}: {e}")
                 continue

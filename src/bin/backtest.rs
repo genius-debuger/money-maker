@@ -326,81 +326,52 @@ impl BacktestResults {
 }
 
 fn load_parquet_data(file_path: &Path) -> Result<Vec<(u64, Vec<(f64, f64)>, Vec<(f64, f64)>)>> {
-    // Load Parquet file
     let df = LazyFrame::scan_parquet(file_path, ScanArgsParquet::default())?
         .collect()
         .context("Failed to collect DataFrame")?;
 
-    // Group by timestamp and aggregate
-    let grouped = df
-        .lazy()
-        .group_by([col("timestamp")])
-        .agg([
-            col("price").filter(col("side").eq(lit("bid"))).alias("bid_prices"),
-            col("size").filter(col("side").eq(lit("bid"))).alias("bid_sizes"),
-            col("price").filter(col("side").eq(lit("ask"))).alias("ask_prices"),
-            col("size").filter(col("side").eq(lit("ask"))).alias("ask_sizes"),
-        ])
-        .sort("timestamp", SortOptions::default())
-        .collect()
-        .context("Failed to group and sort data")?;
-
+    // Expect wide columns: bid_px_0..19, bid_sz_0..19, ask_px_0..19, ask_sz_0..19
     let mut snapshots = Vec::new();
-
-    // Extract data row by row
-    for row in grouped.iter() {
-        let timestamp = row[0]
-            .try_extract::<u64>()
-            .ok()
+    for row in df.iter() {
+        let ts = row
+            .0
+            .get(0)
+            .and_then(|v| v.try_extract::<u64>().ok())
             .unwrap_or(0);
-        
-        // Extract bid prices and sizes
-        let bid_prices_series = row.get(1).ok().and_then(|s| s.list().ok()).cloned();
-        let bid_sizes_series = row.get(2).ok().and_then(|s| s.list().ok()).cloned();
-        
-        let mut bids = Vec::new();
-        if let (Some(prices), Some(sizes)) = (bid_prices_series, bid_sizes_series) {
-            let prices_vec: Result<Vec<f64>, _> = prices
-                .f64()
-                .map(|s| s.into_iter().collect())
-                .ok_or_else(|| anyhow::anyhow!("Failed to extract bid prices"));
-            let sizes_vec: Result<Vec<f64>, _> = sizes
-                .f64()
-                .map(|s| s.into_iter().collect())
-                .ok_or_else(|| anyhow::anyhow!("Failed to extract bid sizes"));
-            
-            if let (Ok(p), Ok(s)) = (prices_vec, sizes_vec) {
-                for (price, size) in p.into_iter().zip(s.into_iter()) {
-                    bids.push((price, size));
-                }
-            }
-        }
-        
-        // Extract ask prices and sizes
-        let ask_prices_series = row.get(3).ok().and_then(|s| s.list().ok()).cloned();
-        let ask_sizes_series = row.get(4).ok().and_then(|s| s.list().ok()).cloned();
-        
-        let mut asks = Vec::new();
-        if let (Some(prices), Some(sizes)) = (ask_prices_series, ask_sizes_series) {
-            let prices_vec: Result<Vec<f64>, _> = prices
-                .f64()
-                .map(|s| s.into_iter().collect())
-                .ok_or_else(|| anyhow::anyhow!("Failed to extract ask prices"));
-            let sizes_vec: Result<Vec<f64>, _> = sizes
-                .f64()
-                .map(|s| s.into_iter().collect())
-                .ok_or_else(|| anyhow::anyhow!("Failed to extract ask sizes"));
-            
-            if let (Ok(p), Ok(s)) = (prices_vec, sizes_vec) {
-                for (price, size) in p.into_iter().zip(s.into_iter()) {
-                    asks.push((price, size));
-                }
-            }
-        }
-        
-        snapshots.push((timestamp, bids, asks));
-    }
 
+        let mut bids = Vec::new();
+        let mut asks = Vec::new();
+        for level in 0..20 {
+            let bp = row
+                .0
+                .get(df.find_idx(&format!("bid_px_{}", level)).unwrap_or(0))
+                .and_then(|v| v.try_extract::<f64>().ok())
+                .unwrap_or(0.0);
+            let bs = row
+                .0
+                .get(df.find_idx(&format!("bid_sz_{}", level)).unwrap_or(0))
+                .and_then(|v| v.try_extract::<f64>().ok())
+                .unwrap_or(0.0);
+            if bp > 0.0 && bs > 0.0 {
+                bids.push((bp, bs));
+            }
+
+            let ap = row
+                .0
+                .get(df.find_idx(&format!("ask_px_{}", level)).unwrap_or(0))
+                .and_then(|v| v.try_extract::<f64>().ok())
+                .unwrap_or(0.0);
+            let az = row
+                .0
+                .get(df.find_idx(&format!("ask_sz_{}", level)).unwrap_or(0))
+                .and_then(|v| v.try_extract::<f64>().ok())
+                .unwrap_or(0.0);
+            if ap > 0.0 && az > 0.0 {
+                asks.push((ap, az));
+            }
+        }
+        snapshots.push((ts, bids, asks));
+    }
     Ok(snapshots)
 }
 
