@@ -13,13 +13,17 @@ The system follows a **Hybrid Actor Model** with three distinct phases:
 ## System Components
 
 ### Rust Execution Engine
-- **Order Book**: Lock-free order book reconstruction using `DashMap` and `BTreeMap`
-- **Order Management**: Batching logic to minimize rate-limit usage (1 unit for N orders)
+- **WebSocket Manager**: Finite State Machine with watchdog timer and backoff logic
+- **Order Book**: Double-buffered zero-allocation order book for snapshot updates
+- **Order Management**: Latency-aware batching (configurable via `BATCH_WINDOW_MS` env var)
 - **Strategy Processor**: Circuit breakers, funding arbitrage, rebate capture
 - **IPC**: ZeroMQ communication with Python AI engine
+- **Backtester**: Event-driven backtesting with priority queue and latency simulation
 
 ### Python Alpha Engine
+- **Data Miner**: Downloads historical L2 order book data from Hyperliquid's S3 archive
 - **LiT Transformer**: Limit Order Book Transformer predicting micro-price movements
+- **Training Script**: Triple-Barrier labeling method for model training
 - **Avellaneda-Stoikov Strategy**: Extended with PPO for dynamic risk aversion
 - **Inference Loop**: High-performance async loop using `uvloop`
 
@@ -30,40 +34,50 @@ The system follows a **Hybrid Actor Model** with three distinct phases:
 
 ## Quick Start
 
-### 1. Kernel Optimization
+### 1. VPS Setup (One-time)
 
 ```bash
-sudo chmod +x optimize_kernel.sh
+sudo chmod +x setup_vps.sh optimize_kernel.sh
+sudo ./setup_vps.sh
 sudo ./optimize_kernel.sh
 sudo reboot
 ```
 
-### 2. Build Rust Components
-
-```bash
-cd hyperliquid-hft
-cargo build --release
-```
-
-### 3. Setup Python Environment
+### 2. Download Training Data
 
 ```bash
 cd python
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+python data_miner.py --start-date 2024-01-01 --end-date 2024-01-31 --coins BTC ETH
 ```
 
-### 4. Configure WireGuard
-
-Edit `wg0.conf` with your WireGuard keys and deploy:
+### 3. Train LiT Model
 
 ```bash
-sudo cp wg0.conf /etc/wireguard/
-sudo wg-quick up wg0
+python train.py --data-dir data/parquet --epochs 50
 ```
 
-### 5. Start Services
+### 4. Run Backtest
+
+```bash
+cd ../..
+cargo build --release
+cargo run --bin backtest data/parquet/2024-01-01/BTC.parquet 15
+```
+
+### 5. Build and Deploy
+
+```bash
+cargo build --release
+sudo cp target/release/hyperliquid-hft /opt/hyperliquid-hft/
+sudo systemctl enable --now hyperliquid-hft
+```
+
+### 6. Start Python Alpha Engine
+
+```bash
+cd python
+python main.py
+```
 
 **Rust Execution Engine:**
 ```bash
@@ -88,10 +102,15 @@ prometheus --config.file=prometheus.yml
 
 ## Configuration
 
+### Environment Variables
+
+- `BATCH_WINDOW_MS`: Order batching window in milliseconds (default: 2ms)
+- `RUST_LOG`: Logging level (e.g., `hyperliquid_hft=info`)
+
 ### Hyperliquid Node
 
-Edit `visor.json` with your node configuration. Key settings:
-- Static peer: `157.90.207.92` (Imperator node)
+Edit `config/visor.json` with your node configuration. Key settings:
+- Static peer: `157.90.207.92` (Imperator validator in Germany)
 - Disable output file buffering for lower latency
 - CPU pinning to isolated cores (2-15)
 
@@ -156,21 +175,28 @@ Key metrics:
 ```
 .
 ├── optimize_kernel.sh      # Kernel optimization script
-├── visor.json              # Hyperliquid node configuration
+├── setup_vps.sh            # VPS setup script (firewall, WireGuard, services)
 ├── Cargo.toml              # Rust dependencies
 ├── src/
 │   ├── main.rs             # Entry point
-│   ├── orderbook.rs        # Lock-free order book
-│   ├── execution.rs        # Order manager with batching
+│   ├── websocket.rs        # WebSocket FSM with watchdog
+│   ├── orderbook.rs        # Double-buffered order book
+│   ├── execution.rs        # Order manager with latency-aware batching
 │   ├── ipc.rs              # ZeroMQ IPC
 │   ├── strategy.rs         # Strategy processor + circuit breakers
 │   ├── metrics.rs          # Prometheus metrics endpoint
-│   └── types.rs            # Shared types
+│   ├── types.rs            # Shared types
+│   └── bin/
+│       └── backtest.rs     # Event-driven backtesting engine
 ├── python/
 │   ├── model.py            # LiT Transformer model
 │   ├── strategy.py         # Avellaneda-Stoikov + PPO
 │   ├── main.py             # Inference loop
+│   ├── data_miner.py       # S3 data downloader
+│   ├── train.py            # Model training script
 │   └── requirements.txt    # Python dependencies
+├── config/
+│   └── visor.json          # Hyperliquid node configuration
 ├── wg0.conf                # WireGuard configuration
 ├── prometheus.yml          # Prometheus scrape config
 └── dashboard.json          # Grafana dashboard

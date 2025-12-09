@@ -1,9 +1,201 @@
 use crate::types::{BookLevel, BookUpdate, MarketData};
 use dashmap::DashMap;
-use parking_lot::RwLock;
-use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+// Double-buffering is implemented directly in DoubleBufferedBook using arrays
+
+/// Order book level (price, size)
+#[derive(Debug, Clone, Copy)]
+pub struct Level {
+    pub price: f64,
+    pub size: f64,
+}
+
+impl Level {
+    pub fn new(price: f64, size: f64) -> Self {
+        Self { price, size }
+    }
+}
+
+/// Double-buffered order book implementation
+/// Pre-allocates two buffers to avoid memory allocation on snapshot updates
+pub struct DoubleBufferedBook {
+    symbol: String,
+    bids: [Vec<Level>; 2],
+    asks: [Vec<Level>; 2],
+    read_index: AtomicUsize,
+    last_sequence: std::sync::atomic::AtomicU64,
+    last_update_time: std::sync::atomic::AtomicU64,
+    depth: usize,
+}
+
+impl DoubleBufferedBook {
+    pub fn new(symbol: String, depth: usize) -> Self {
+        Self {
+            symbol,
+            bids: [
+                Vec::with_capacity(depth),
+                Vec::with_capacity(depth),
+            ],
+            asks: [
+                Vec::with_capacity(depth),
+                Vec::with_capacity(depth),
+            ],
+            read_index: AtomicUsize::new(0),
+            last_sequence: std::sync::atomic::AtomicU64::new(0),
+            last_update_time: std::sync::atomic::AtomicU64::new(0),
+            depth,
+        }
+    }
+
+    /// Update order book with a snapshot
+    /// This is zero-allocation: we clear and reuse the write buffer
+    pub fn apply_snapshot(
+        &mut self,
+        bids: &[(f64, f64)],
+        asks: &[(f64, f64)],
+        sequence: u64,
+        timestamp: u64,
+    ) {
+        // Get write buffer (opposite of read)
+        let write_idx = 1 - self.read_index.load(Ordering::Acquire);
+        
+        // Write bids
+        {
+            let write_bids = &mut self.bids.buffers[write_idx];
+            write_bids.clear();
+            write_bids.extend(
+                bids.iter()
+                    .take(self.depth)
+                    .filter(|(_, size)| *size > 0.0)
+                    .map(|(price, size)| Level::new(*price, *size)),
+            );
+            // Sort descending (highest bid first)
+            write_bids.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // Write asks
+        {
+            let write_asks = &mut self.asks.buffers[write_idx];
+            write_asks.clear();
+            write_asks.extend(
+                asks.iter()
+                    .take(self.depth)
+                    .filter(|(_, size)| *size > 0.0)
+                    .map(|(price, size)| Level::new(*price, *size)),
+            );
+            // Sort ascending (lowest ask first)
+            write_asks.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // Atomic swap: readers now see the new buffer
+        let current = self.read_index.load(Ordering::Acquire);
+        self.read_index.store(1 - current, Ordering::Release);
+
+        // Update metadata atomically
+        self.last_sequence.store(sequence, Ordering::Release);
+        self.last_update_time.store(timestamp, Ordering::Release);
+    }
+
+    /// Get current market data (reads from active buffer)
+    pub fn get_market_data(&self) -> Option<MarketData> {
+        let read_idx = self.read_index.load(Ordering::Acquire);
+        let bids = &self.bids[read_idx];
+        let asks = &self.asks[read_idx];
+
+        let best_bid = bids.first()?; // Highest bid (first after sort)
+        let best_ask = asks.first()?; // Lowest ask (first after sort)
+
+        let mid_price = (best_bid.price + best_ask.price) / 2.0;
+        let spread = best_ask.price - best_bid.price;
+
+        let bid_size: f64 = bids.iter().take(self.depth).map(|l| l.size).sum();
+        let ask_size: f64 = asks.iter().take(self.depth).map(|l| l.size).sum();
+
+        Some(MarketData {
+            symbol: self.symbol.clone(),
+            mid_price,
+            spread,
+            bid_size,
+            ask_size,
+            timestamp: Instant::now(),
+        })
+    }
+
+    /// Get top N levels for bids and asks
+    pub fn get_levels(&self, levels: usize) -> (Vec<BookLevel>, Vec<BookLevel>) {
+        let read_idx = self.read_index.load(Ordering::Acquire);
+        let bids = &self.bids[read_idx];
+        let asks = &self.asks[read_idx];
+
+        let bid_levels: Vec<BookLevel> = bids
+            .iter()
+            .take(levels)
+            .map(|l| BookLevel {
+                price: l.price,
+                size: l.size,
+            })
+            .collect();
+
+        let ask_levels: Vec<BookLevel> = asks
+            .iter()
+            .take(levels)
+            .map(|l| BookLevel {
+                price: l.price,
+                size: l.size,
+            })
+            .collect();
+
+        (bid_levels, ask_levels)
+    }
+
+    pub fn get_last_sequence(&self) -> u64 {
+        self.last_sequence.load(Ordering::Acquire)
+    }
+}
+
+
+// Safe wrapper using Arc<Mutex> for actual usage
+pub struct SafeDoubleBufferedBook {
+    inner: Arc<parking_lot::Mutex<DoubleBufferedBook>>,
+}
+
+impl SafeDoubleBufferedBook {
+    pub fn new(symbol: String, depth: usize) -> Self {
+        Self {
+            inner: Arc::new(parking_lot::Mutex::new(DoubleBufferedBook::new(symbol, depth))),
+        }
+    }
+
+    pub fn apply_snapshot(&self, bids: &[(f64, f64)], asks: &[(f64, f64)], sequence: u64, timestamp: u64) {
+        self.inner.lock().apply_snapshot(bids, asks, sequence, timestamp);
+    }
+
+    pub fn get_symbol(&self) -> String {
+        self.inner.lock().symbol.clone()
+    }
+
+    pub fn get_market_data(&self) -> Option<MarketData> {
+        self.inner.lock().get_market_data()
+    }
+
+    pub fn get_levels(&self, levels: usize) -> (Vec<BookLevel>, Vec<BookLevel>) {
+        self.inner.lock().get_levels(levels)
+    }
+
+    pub fn get_last_sequence(&self) -> u64 {
+        self.inner.lock().get_last_sequence()
+    }
+}
+
+/// Legacy LocalBook for compatibility (deprecated, use DoubleBufferedBook)
+use parking_lot::RwLock;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OrderedFloat(f64);
 
 pub struct LocalBook {
     symbol: String,
@@ -13,14 +205,11 @@ pub struct LocalBook {
     depth: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct OrderedFloat(f64);
-
 impl LocalBook {
     pub fn new(symbol: String, depth: usize) -> Self {
         Self {
             symbol,
-            bids: Arc::new(RwLock::new(BTreeMap::new())),
+            bids: Arc::new(RwLock::new(BTreeMap::new()),
             asks: Arc::new(RwLock::new(BTreeMap::new())),
             last_sequence: Arc::new(RwLock::new(0)),
             depth,
@@ -30,7 +219,6 @@ impl LocalBook {
     pub fn update(&self, update: &BookUpdate) -> Result<Option<MarketData>, BookError> {
         let mut last_seq = self.last_sequence.write();
         
-        // Check for sequence gap
         if *last_seq > 0 && update.sequence != *last_seq + 1 {
             return Err(BookError::SequenceGap {
                 expected: *last_seq + 1,
@@ -40,7 +228,6 @@ impl LocalBook {
         
         *last_seq = update.sequence;
 
-        // Update bids (descending order)
         {
             let mut bids = self.bids.write();
             bids.clear();
@@ -51,7 +238,6 @@ impl LocalBook {
             }
         }
 
-        // Update asks (ascending order)
         {
             let mut asks = self.asks.write();
             asks.clear();
@@ -93,8 +279,8 @@ impl LocalBook {
         let bids = self.bids.read();
         let asks = self.asks.read();
 
-        let best_bid = bids.iter().rev().next()?; // Highest bid
-        let best_ask = asks.iter().next()?; // Lowest ask
+        let best_bid = bids.iter().rev().next()?;
+        let best_ask = asks.iter().next()?;
 
         let mid_price = (best_bid.0 .0 + best_ask.0 .0) / 2.0;
         let spread = best_ask.0 .0 - best_bid.0 .0;
@@ -150,7 +336,7 @@ pub enum BookError {
 }
 
 pub struct BookManager {
-    books: Arc<DashMap<String, Arc<LocalBook>>>,
+    books: Arc<DashMap<String, Arc<SafeDoubleBufferedBook>>>,
 }
 
 impl BookManager {
@@ -160,14 +346,14 @@ impl BookManager {
         }
     }
 
-    pub fn get_or_create(&self, symbol: String, depth: usize) -> Arc<LocalBook> {
+    pub fn get_or_create(&self, symbol: String, depth: usize) -> Arc<SafeDoubleBufferedBook> {
         self.books
             .entry(symbol.clone())
-            .or_insert_with(|| Arc::new(LocalBook::new(symbol, depth)))
+            .or_insert_with(|| Arc::new(SafeDoubleBufferedBook::new(symbol, depth)))
             .clone()
     }
 
-    pub fn get(&self, symbol: &str) -> Option<Arc<LocalBook>> {
+    pub fn get(&self, symbol: &str) -> Option<Arc<SafeDoubleBufferedBook>> {
         self.books.get(symbol).map(|entry| entry.clone())
     }
 }
@@ -177,4 +363,3 @@ impl Default for BookManager {
         Self::new()
     }
 }
-

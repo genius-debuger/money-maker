@@ -16,6 +16,7 @@ rmp-serde = "1.1"
 async-trait = "0.1"
 futures = "0.3"
 tokio-stream = "0.1"
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 axum = { version = "0.7", features = ["metrics"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace"] }
@@ -25,6 +26,12 @@ parking_lot = "0.12"
 num-traits = "0.2"
 thiserror = "1.0"
 chrono = "0.4"
+polars = { version = "0.39", features = ["lazy", "parquet"] }
+url = "2.5"
+
+[[bin]]
+name = "backtest"
+path = "src/bin/backtest.rs"
 
 [dev-dependencies]
 tokio-test = "0.4"

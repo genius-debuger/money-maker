@@ -4,6 +4,7 @@ mod metrics;
 mod orderbook;
 mod strategy;
 mod types;
+mod websocket;
 
 use anyhow::Result;
 use execution::{batch_processor, OrderManager};
@@ -14,6 +15,7 @@ use std::time::Instant;
 use strategy::StrategyProcessor;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+use websocket::WebSocketManager;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +31,7 @@ async fn main() -> Result<()> {
 
     // Initialize components
     let book_manager = Arc::new(BookManager::new());
-    let (order_manager, batch_rx) = OrderManager::new(2); // 2ms batch window
+    let (order_manager, batch_rx) = OrderManager::new(); // Batch window from env var
     let order_manager = Arc::new(order_manager);
     
     let strategy_processor = StrategyProcessor::new(

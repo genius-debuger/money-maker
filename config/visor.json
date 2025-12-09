@@ -1,0 +1,83 @@
+{
+  "version": "2",
+  "network": {
+    "name": "mainnet",
+    "chain_id": 998,
+    "rpc_url": "https://api.hyperliquid.xyz/info",
+    "ws_url": "wss://api.hyperliquid.xyz/ws",
+    "validator_rpc": "https://validator-http-us.hyperliquid.xyz",
+    "validator_ws": "wss://validator-ws-us.hyperliquid.xyz"
+  },
+  "node": {
+    "mode": "non-validator",
+    "disable_output_file_buffering": true,
+    "log_level": "info",
+    "log_file": "/var/log/hyperliquid/node.log",
+    "max_connections": 1000,
+    "peer_timeout": 30,
+    "enable_metrics": true,
+    "metrics_port": 9092,
+    "metrics_address": "127.0.0.1"
+  },
+  "peering": {
+    "static_peers": [
+      {
+        "ip": "157.90.207.92",
+        "port": 30303,
+        "node_id": "",
+        "trusted": true,
+        "name": "Imperator Validator (Germany)"
+      }
+    ],
+    "enable_discovery": false,
+    "max_peers": 50,
+    "min_peers": 1,
+    "target_peers": 10
+  },
+  "storage": {
+    "cache_size_mb": 2048,
+    "pruning": "archive",
+    "database_path": "/var/lib/hyperliquid/db",
+    "enable_wal": true,
+    "sync_mode": "fast"
+  },
+  "performance": {
+    "threads": 14,
+    "pin_threads": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    "priority": "high",
+    "enable_jemalloc": true,
+    "allocator": "jemalloc"
+  },
+  "api": {
+    "enable_rpc": true,
+    "rpc_port": 8545,
+    "rpc_address": "127.0.0.1",
+    "enable_ws": true,
+    "ws_port": 8546,
+    "ws_address": "127.0.0.1",
+    "cors_origins": ["http://127.0.0.1:3000"],
+    "api_keys": []
+  },
+  "monitoring": {
+    "enable_prometheus": true,
+    "prometheus_port": 9092,
+    "prometheus_address": "127.0.0.1",
+    "enable_tracing": false,
+    "tracing_endpoint": ""
+  },
+  "security": {
+    "enable_rate_limiting": true,
+    "rate_limit_rps": 100,
+    "enable_authentication": false,
+    "allowed_ips": ["127.0.0.1", "10.100.0.0/24"]
+  },
+  "advanced": {
+    "enable_experimental_features": false,
+    "custom_flags": [
+      "--disable-output-file-buffering",
+      "--fast-sync",
+      "--no-ws-compression"
+    ]
+  }
+}
+

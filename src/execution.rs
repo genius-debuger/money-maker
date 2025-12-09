@@ -2,6 +2,7 @@ use crate::types::{Order, OrderInstruction, OrderSide, OrderStatus, OrderType};
 use anyhow::Result;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -16,7 +17,15 @@ pub struct OrderManager {
 }
 
 impl OrderManager {
-    pub fn new(batch_window_ms: u64) -> (Self, mpsc::UnboundedReceiver<Vec<OrderInstruction>>) {
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<Vec<OrderInstruction>>) {
+        // Get batch window from environment variable, default to 2ms
+        let batch_window_ms = env::var("BATCH_WINDOW_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(2);
+        
+        tracing::info!("OrderManager initialized with batch window: {}ms", batch_window_ms);
+        
         let (tx, rx) = mpsc::unbounded_channel();
         let manager = Self {
             orders: Arc::new(RwLock::new(HashMap::new())),
@@ -26,6 +35,10 @@ impl OrderManager {
             batch_window: Duration::from_millis(batch_window_ms),
         };
         (manager, rx)
+    }
+
+    pub fn get_batch_window(&self) -> Duration {
+        self.batch_window
     }
 
     pub fn submit_order(&self, instruction: OrderInstruction) -> Result<String> {
