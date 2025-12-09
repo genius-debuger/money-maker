@@ -160,6 +160,11 @@ impl SafeDoubleBufferedBook {
         self.inner.get_levels(levels)
     }
 
+    pub fn get_best_bid_ask(&self) -> Option<(f64, f64)> {
+        let (bids, asks) = self.inner.get_levels(1);
+        Some((bids.first()?.price, asks.first()?.price))
+    }
+
     pub fn get_last_sequence(&self) -> u64 {
         self.inner.get_last_sequence()
     }
@@ -168,6 +173,13 @@ impl SafeDoubleBufferedBook {
 /// Legacy LocalBook for compatibility (deprecated, use DoubleBufferedBook)
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
+
+// Placeholder for missing type to ensure compilability of legacy code.
+pub struct BookUpdate {
+    pub sequence: u64,
+    pub bids: Vec<(f64, f64)>,
+    pub asks: Vec<(f64, f64)>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct OrderedFloat(f64);
@@ -184,7 +196,7 @@ impl LocalBook {
     pub fn new(symbol: String, depth: usize) -> Self {
         Self {
             symbol,
-            bids: Arc::new(RwLock::new(BTreeMap::new()),
+            bids: Arc::new(RwLock::new(BTreeMap::new())),
             asks: Arc::new(RwLock::new(BTreeMap::new())),
             last_sequence: Arc::new(RwLock::new(0)),
             depth,
@@ -330,6 +342,15 @@ impl BookManager {
 
     pub fn get(&self, symbol: &str) -> Option<Arc<SafeDoubleBufferedBook>> {
         self.books.get(symbol).map(|entry| entry.clone())
+    }
+
+    /// Helper to get best bid/ask for a symbol
+    pub fn get_best_bid_ask(&self, symbol: &str) -> Result<Option<(f64, f64)>, BookError> {
+        if let Some(book) = self.books.get(symbol) {
+            Ok(book.get_best_bid_ask())
+        } else {
+            Ok(None)
+        }
     }
 }
 
