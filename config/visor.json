@@ -28,6 +28,20 @@
         "node_id": "",
         "trusted": true,
         "name": "Imperator Validator (Germany)"
+      },
+      {
+        "ip": "188.40.126.33",
+        "port": 30303,
+        "node_id": "",
+        "trusted": true,
+        "name": "Hetzner Fallback (EU)"
+      },
+      {
+        "ip": "5.9.61.22",
+        "port": 30303,
+        "node_id": "",
+        "trusted": true,
+        "name": "EU Fallback"
       }
     ],
     "enable_discovery": false,
@@ -81,4 +95,3 @@
     ]
   }
 }
-
